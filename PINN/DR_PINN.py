@@ -400,8 +400,8 @@ class Diffusion_Reaction:
                                       'D*': '{0:.2e},{1:.2e}'.format(torch.max(D_star),torch.min(D_star)),
                                       'grouped_ic':'{0:.2e},{1:.2e}'.format(loss_ic_gr1,loss_ic_gr2)                                         
                                       })
-                    self.lam_pde_log.append(1. / (self.var_pde ** 2).item())
-                    self.lam_bc_log.append(1. / (self.var_bc ** 2).item())
+                    self.lam_ic1_log.append(1. / (self.var_ic1 ** 2).item())
+                    self.lam_ic2_log.append(1. / (self.var_ic2 ** 2).item())
                     self.lam_ic_log.append(1. / (self.var_ic ** 2).item())
                 
                 elif self.model_type in ['IAW_PINN', 'I_PINN']:
