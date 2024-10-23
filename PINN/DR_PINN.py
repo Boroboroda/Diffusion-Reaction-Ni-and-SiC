@@ -12,6 +12,8 @@ import torch
 import numpy as np
 import timeit
 import torch.optim
+from lion_pytorch import Lion
+import torch.nn as nn
 import torch.optim.lr_scheduler as lr_scheduler
 from tqdm import trange
 import random
@@ -85,7 +87,7 @@ class Sampler: ##Grid Sampler
         points_init = torch.cat((x_init, t_init), dim=1)
         indices_init = torch.randperm(points_init.size(0))
         points_init = points_init[indices_init].to(device)
-        
+
         return points_inter, points_bound, points_init
     
 """Main Part of our Diffusion Reaction PDE Model and Training-Process"""
@@ -135,8 +137,6 @@ class Diffusion_Reaction:
 
         self.optimizer_ic = torch.optim.Adam([self.var_ic1] + [self.var_ic2], lr=1e-3)  ##自适应权重的优化器
 
-        self.lam_threshold = lam_threshold    ##Bound of loss weights
-
         '''Training Log'''
         self.iter = 0
 
@@ -182,19 +182,26 @@ class Diffusion_Reaction:
         '''Governing Equation Part'''
         coords_pde =coords_pde.clone().detach().requires_grad_(True)
         predictions = self.dnn(coords_pde)
+
         c_a,c_bc,c_c,c_ab,c_abb,c_aab = predictions[:,0],predictions[:,1],predictions[:,2],predictions[:,3],predictions[:,4],predictions[:,5]
 
         ##Derivative Terms
         gradients_t = [self.gradients(c, coords_pde)[:,1] for c in [c_a, c_bc, c_c, c_ab, c_abb, c_aab]]
-        dca_dt,dcbc_dt,dcc_dt,dcab_dt,dcabb_dt,dcaab_dt = gradients_t   
+        dca_dt,dcbc_dt,dcc_dt,dcab_dt,dcabb_dt,dcaab_dt = gradients_t
 
         gradients_x = [self.gradients(c, coords_pde)[:,0] for c in [c_a, c_bc, c_c, c_ab, c_abb, c_aab]]
         dca_dx, dcbc_dx, dcc_dx, dcab_dx, dcabb_dx, dcaab_dx = gradients_x
 
+        gradients_xx = [self.gradients(c, coords_pde,order =1)[:,0] for c in [dca_dx,dcbc_dx,dcc_dx]]
+        dca_dxx, dcbc_dxx, dcc_dxx = gradients_xx
+
         ##Construcion of compouned Diffusivity
         sig_numerator = c_bc + c_c + c_ab + c_abb + c_aab
         sig_denominator = c_a + c_bc + c_c + c_ab + c_abb + c_aab
-        sig_denominator = torch.where((sig_denominator == 0), 1e-8, sig_denominator)
+        partial_part = dcbc_dx + dcc_dx + dcab_dx + dcabb_dx + dcaab_dx
+
+        sig_denominator = torch.where((sig_denominator == 0), 1e-10, sig_denominator)
+
         sig_D = sig_numerator /sig_denominator
         D_A = self.D_A* (self.anneal_time/(self.L**2))  #With Non-Dimensionalization
         D_star = D_A * sig_D
@@ -235,20 +242,22 @@ class Diffusion_Reaction:
         mask_h = (coords_ic[:, 0] <= self.h/self.L)
         tensor_h = coords_ic[mask_h].requires_grad_(True)
 
-        mask_L = (coords_ic[:, 0] >= self.h/self.L) & (coords_ic[:, 0] <= self.L/self.L)      
-        tensor_L = coords_ic[mask_L].requires_grad_(True)
+        mask_L = (coords_ic[:, 0] >= self.h/self.L) & (coords_ic[:, 0] <= self.L/self.L)
+        tensor_L = coords_ic[mask_L].requires_grad_(True)  
 
         ca_in_h,cbc_in_h = self.dnn(tensor_h)[:,0],self.dnn(tensor_h)[:,1]
         ca_in_L,cbc_in_L = self.dnn(tensor_L)[:,0],self.dnn(tensor_L)[:,1]
         cc_init,cab_init,cabb_init,caab_init = self.dnn(coords_ic)[:,2],self.dnn(coords_ic)[:,3],self.dnn(coords_ic)[:,4],self.dnn(coords_ic)[:,5]
 
-        loss_ic = torch.mean((ca_in_h - self.N_SA/self.N_SA)**2) + torch.mean((cbc_in_L - self.N_SB/self.N_SB)**2) +\
-            torch.mean(cc_init **2) + torch.mean(cab_init **2) + torch.mean(cabb_init **2) + torch.mean(caab_init **2) +\
-            torch.mean(ca_in_L**2) + torch.mean(cbc_in_h**2)
+        # loss_ic = torch.mean((ca_in_h - self.N_SA/self.N_SA)**2) + torch.mean((cbc_in_L - self.N_SB/self.N_SB)**2) +\
+        #     torch.mean(cc_init **2) + torch.mean(cab_init **2) + torch.mean(cabb_init **2) + torch.mean(caab_init **2) +\
+        #     torch.mean(ca_in_L**2) + torch.mean(cbc_in_h**2)
         
         loss_ic_group1 = torch.mean((ca_in_h - self.N_SA/self.N_SA)**2) + torch.mean((cbc_in_L - self.N_SB/self.N_SB)**2) + torch.mean(ca_in_L**2) + torch.mean(cbc_in_h**2)
         loss_ic_group2 = torch.mean(cc_init **2) + torch.mean(cab_init **2) + torch.mean(cabb_init **2) + torch.mean(caab_init **2)
-        
+
+        loss_ic = loss_ic_group1 + loss_ic_group2
+
         return loss_pde,loss_bc,loss_ic,D_star,loss_ic_group1,loss_ic_group2
 
     ##Normal Loss Function
@@ -262,7 +271,7 @@ class Diffusion_Reaction:
         w_loss_ic2 = 1. / (self.var_ic2 ** 2 + 1. / self.lam_threshold) * loss_ic2
         penalize_item = torch.log(self.var_ic1 ** 2 + 1. / self.lam_threshold) +\
                         torch.log(self.var_ic2 ** 2 + 1. / self.lam_threshold)
-        loss_total = loss_pde + loss_bc +w_loss_ic1 + w_loss_ic2 + penalize_item
+        loss_total = loss_pde + loss_bc + w_loss_ic1 + w_loss_ic2 + penalize_item
         return loss_total
     
     ##Usage of Sampler
@@ -273,11 +282,11 @@ class Diffusion_Reaction:
     ##1 time epoch training
     def epoch_train(self,num_interior,num_boundary, num_initial,additional_points):
         coords_pde,coords_bc,coords_ic = self.fetch_sample(self.sampler, num_interior,num_boundary, num_initial,additional_points)
-        loss_pde,loss_bc,loss_ic,D_star,loss_ic_gr1,loss_ic_gr2 = self.diffusion_reaction(coords_pde,coords_bc,coords_ic)
-        return loss_pde,loss_bc,loss_ic,D_star,loss_ic_gr1,loss_ic_gr2            
+        loss_pde,loss_bc,loss_ic,D_star,loss_ic_gr1,loss_ic_gr2 = self.diffusion_reaction(coords_pde,coords_bc,coords_ic) 
+        return loss_pde,loss_bc,loss_ic,D_star,loss_ic_gr1,loss_ic_gr2        
 
     ##Regard relative error as testing
-    def relative_error(self,Nondimensional = True):
+    def relative_error(self,scale = True):
         x = np.linspace(0,1,100)
         t = np.linspace(0,1,100)
         ms_x,ms_t = np.meshgrid(x,t)
@@ -291,19 +300,23 @@ class Diffusion_Reaction:
 
         result = self.dnn(X_star).data.cpu().numpy()
         c_a,c_bc,c_c,c_ab,c_abb,c_aab = result[:,0],result[:,1],result[:,2],result[:,3],result[:,4],result[:,5]
-        
-        if Nondimensional==False:
-            c_a,c_bc,c_c,c_ab,c_abb,c_aab = c_a*self.N_SA, c_bc*self.N_SB, c_c*self.N_SC, c_ab*self.N_SAB, c_abb*self.N_SABB, c_aab*0
+
+        if scale == True:
+            net_u1,net_u2,net_u3,net_u4,net_u5,net_u6 = [conc.reshape(100, 100) for conc in [c_a, c_bc, c_c, c_ab, c_abb, c_aab]]
+            net_u1,net_u2,net_u3,net_u4,net_u5,net_u6 = [net_u.transpose() for net_u in [net_u1,net_u2,net_u3,net_u4,net_u5,net_u6]]  
+
             fdm_filenames = ['u1_output.csv', 'u2_output.csv', 'u3_output.csv', 'u4_output.csv', 'u5_output.csv','u6_output.csv']
-            fdm_dir = "./Results/reaction t = 60/FDM_Reference_NonDimension"
-            
-        net_u1,net_u2,net_u3,net_u4,net_u5,net_u6 = [conc.reshape(100, 100) for conc in [c_a, c_bc, c_c, c_ab, c_abb, c_aab]]
-        net_u1,net_u2,net_u3,net_u4,net_u5,net_u6 = [net_u.transpose() for net_u in [net_u1,net_u2,net_u3,net_u4,net_u5,net_u6]]
-        """务必牢记这里对神经网络结果的转置操作"""
+            fdm_dir = "./Results/reaction t = 60/FDM_Reference_[0,1]" 
+        
+        elif scale==False:
+            c_a,c_bc,c_c,c_ab,c_abb,c_aab = c_a*self.N_SA, c_bc*self.N_SB, c_c*self.N_SC, c_ab*self.N_SAB, c_abb*self.N_SABB, c_aab*0
 
-        fdm_filenames = ['u1_output.csv', 'u2_output.csv', 'u3_output.csv', 'u4_output.csv', 'u5_output.csv','u6_output.csv']
+            net_u1,net_u2,net_u3,net_u4,net_u5,net_u6 = [conc.reshape(100, 100) for conc in [c_a, c_bc, c_c, c_ab, c_abb, c_aab]]
+            net_u1,net_u2,net_u3,net_u4,net_u5,net_u6 = [net_u.transpose() for net_u in [net_u1,net_u2,net_u3,net_u4,net_u5,net_u6]]  
 
-        fdm_dir = "./Results/reaction t = 60/FDM_Reference"
+            fdm_filenames = ['u1_output.csv', 'u2_output.csv', 'u3_output.csv', 'u4_output.csv', 'u5_output.csv','u6_output.csv']
+            fdm_dir = "./Results/reaction t = 60/FDM_Reference_[0,90]"
+    
 
         fdm_u1,fdm_u2,fdm_u3,fdm_u4,fdm_u5,fdm_u6 = [pd.read_csv(f'{fdm_dir}/{filename}', encoding='utf-8', header=None) for filename in fdm_filenames]
         fdm_u1,fdm_u2,fdm_u3,fdm_u4,fdm_u5,fdm_u6 = [component.iloc[1:,1:] for component in [fdm_u1,fdm_u2,fdm_u3,fdm_u4,fdm_u5,fdm_u6]]
@@ -328,11 +341,13 @@ class Diffusion_Reaction:
         pbar = trange(nIter, ncols=240)    
 
         if self.model_type in ['PINN','IAW_PINN']:
-            optimizer =  torch.optim.Adam(self.dnn.parameters(), lr = 1e-3,betas=(0.9, 0.999),eps=1e-8)  ##神经网络的优化器
+            optimizer =  torch.optim.Adam(self.dnn.parameters(), lr = 1e-3,betas=(0.9, 0.999),eps=1e-8)  
+            # optimizer =  Lion(self.dnn.parameters(), lr = 1e-3,betas=(0.9, 0.999))  
             self.scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
         
         if self.model_type in ['IA_PINN','I_PINN']:
             optimizer =  torch.optim.Adam(self.dnn.parameters(), lr = 1e-2,betas=(0.9, 0.999),eps=1e-8)
+            # optimizer =  Lion(self.dnn.parameters(), lr = 1e-2,betas=(0.9, 0.999))
             self.scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
 
         for it in pbar:
@@ -341,6 +356,7 @@ class Diffusion_Reaction:
             def closuer():
                 global loss_pde,loss_bc,loss_ic,D_star,loss_ic_gr1,loss_ic_gr2
                 optimizer.zero_grad()
+
                 if self.model_type in ['IAW_PINN', 'I_PINN']:
                     self.optimizer_ic.zero_grad()
             
@@ -351,6 +367,21 @@ class Diffusion_Reaction:
 
                 elif self.model_type in ['IAW_PINN', 'I_PINN']:
                     loss = self.AW_loss_function(loss_pde,loss_bc,loss_ic_gr1,loss_ic_gr2)
+
+                # # L1 and L2 Regularization?
+                # l1_lambda = 1e-3  
+                # l2_lambda = 1e-4  
+
+                # l1_reg = torch.tensor(0.).to(device)  
+                # l2_reg = torch.tensor(0.).to(device)  
+
+                # for param in self.dnn.parameters():
+                #     l1_reg += torch.norm(param, 1)  
+                #     l2_reg += torch.norm(param, 2)**2  
+                
+
+                # # # Add
+                # loss += l1_lambda * l1_reg + l2_lambda * l2_reg                
 
                 loss.backward()
 
@@ -374,12 +405,11 @@ class Diffusion_Reaction:
             if self.model_type in ['PINN','IAW_PINN']:
                 scheduler_decay = 500
             if self.model_type in ['IA_PINN','I_PINN']:
-                scheduler_decay = 200
-            
+                scheduler_decay = 300            
             if (self.iter>0) and (self.iter % scheduler_decay == 0):
                 self.scheduler.step()
             
-            loss_true = loss_pde + loss_bc +loss_ic
+            loss_true = loss_pde + loss_bc +loss_ic 
             ##If we meet gradient explosion, we stop the training
             if torch.isnan(loss_true):
                 break
@@ -395,15 +425,15 @@ class Diffusion_Reaction:
                                       'Loss': '{0:.3e}'.format(loss_true.item()),
                                       'loss_pde': '{0:.3e}'.format(loss_pde.item()),
                                       'loss_bc': '{0:.3e}'.format(loss_bc.item()),
-                                      'loss_ic': '{0:.3e}'.format(loss_ic.item()),
+                                      'loss_ic': '{0:.3e}'.format(loss_ic.item()),                                   
+                                      'grouped_ic':'{0:.2e},{1:.2e}'.format(loss_ic_gr1,loss_ic_gr2),                                       
                                       'lr': '{0:.2e}'.format(current_lr),
-                                      'D*': '{0:.2e},{1:.2e}'.format(torch.max(D_star),torch.min(D_star)),
-                                      'grouped_ic':'{0:.2e},{1:.2e}'.format(loss_ic_gr1,loss_ic_gr2)                                         
+                                      'D*': '{0:.2e},{1:.2e}'.format(torch.max(D_star),torch.min(D_star))                                        
                                       })
+                    
                     self.lam_ic1_log.append(1. / (self.var_ic1 ** 2).item())
                     self.lam_ic2_log.append(1. / (self.var_ic2 ** 2).item())
-                    self.lam_ic_log.append(1. / (self.var_ic ** 2).item())
-                
+
                 elif self.model_type in ['IAW_PINN', 'I_PINN']:
                     pbar.set_postfix({
                                       'Loss': '{0:.3e}'.format(loss_true.item()),
