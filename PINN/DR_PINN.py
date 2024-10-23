@@ -2,7 +2,7 @@
 @Project ：Diffusion Reaction PDE
 @File    ：DR_PINN.py
 @IDE     ：VS Code
-@Author  ：Xuepeng Cheng
+@Author  ：Cheng
 @Date    ：2024-10-21
 '''
 from DNN import PINN
