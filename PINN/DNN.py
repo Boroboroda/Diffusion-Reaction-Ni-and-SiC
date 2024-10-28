@@ -12,6 +12,8 @@ import torch.nn as nn
 import numpy as np
 import random
 
+torch.set_default_dtype(torch.float32)
+
 ##Set Random Seeds
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -48,7 +50,8 @@ class PINN(nn.Module):
             self.layernorms = nn.ModuleList([nn.LayerNorm(layers[i + 1]) for i in range(len(layers) - 2)])
 
     def forward(self, x):
-        x = torch.as_tensor(x, dtype=torch.float32)  # Ensure input is float32  
+        if not torch.is_tensor(x):
+            x = torch.from_numpy(x)  # Ensure input is float32  
         a = self.activation(self.linear[0](x))
         
         for i in range(1, len(self.layers) - 2):

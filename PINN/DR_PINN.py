@@ -19,6 +19,8 @@ from tqdm import trange
 import random
 import pandas as pd
 
+torch.set_default_dtype(torch.float32)
+
 """Random Seed Setup"""
 def seed_torch(seed):
     random.seed(seed)
@@ -159,7 +161,7 @@ class Diffusion_Reaction:
         self.log_relative_u5 = []
         self.log_relative_u6 = []
 
-        '''Gradient Function'''
+    '''Gradient Function'''
     def gradients(self,u,x,order =1):
         """
         To calculate the gradient of function u with respect to variable x, higher-order derivatives can be calculated.
@@ -286,7 +288,7 @@ class Diffusion_Reaction:
         return loss_pde,loss_bc,loss_ic,D_star,loss_ic_gr1,loss_ic_gr2        
 
     ##Regard relative error as testing
-    def relative_error(self,scale = True):
+    def relative_error(self,scale = False):
         x = np.linspace(0,1,100)
         t = np.linspace(0,1,100)
         ms_x,ms_t = np.meshgrid(x,t)
