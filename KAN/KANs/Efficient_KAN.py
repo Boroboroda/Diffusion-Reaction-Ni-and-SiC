@@ -64,6 +64,9 @@ class KANLinear(torch.nn.Module):
         # Noise scaling factor for adding noise when initializing spline weights
         self.scale_noise = scale_noise
 
+        # The scaling factor of the basic weight, used to initialize the scaling factor of the basic weight
+        self.scale_base = scale_base
+
         # Scaling factor for base weights, used when initializing base weights
         self.scale_spline = scale_spline      
         
