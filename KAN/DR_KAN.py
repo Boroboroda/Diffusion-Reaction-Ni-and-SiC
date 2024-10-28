@@ -10,6 +10,7 @@ import sys
 sys.path.append("./KANs")
 
 from KANs.Efficient_KAN import KAN
+from KANs.Cheby_KAN import ChebyKAN
 
 import torch
 import numpy as np
@@ -128,10 +129,9 @@ class Diffusion_Reaction:
 
         if self.model_type in ['KAN']:
             self.dnn = KAN(layers,grid_size=8,modified_output=True).to(device)
-        """
-        For This part, maybe add ChebyKAN later!!!
-        """
-
+        elif self.model_type in ['ChebyKAN']:
+            self.dnn = ChebyKAN(layers,degree = 3, use_layer_norm= True).to(device)
+        
         """Here is the part of adaptive weights adjustment, but the effect is not ideal """
         self.var_ic1 = torch.tensor([1.], requires_grad=True).to(device)
         self.var_ic2 = torch.tensor([1.], requires_grad=True).to(device)
@@ -347,7 +347,7 @@ class Diffusion_Reaction:
         if self.model_type in ['ChebyKAN']:
             optimizer =  torch.optim.Adam(self.dnn.parameters(), lr = 1e-2,betas=(0.9, 0.999),eps=1e-8)
             # optimizer =  Lion(self.dnn.parameters(), lr = 1e-2,betas=(0.9, 0.999))
-            # self.scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+            self.scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
 
         for it in pbar:
             current_lr = optimizer.param_groups[0]['lr']        
@@ -402,11 +402,11 @@ class Diffusion_Reaction:
             if self.model_type in ['IAW_KAN', 'I_KAN']:
                 self.optimizer_ic.step(closure=closuer)
             
-            if self.model_type in ['KAN','ChebyKAN']:
+            if self.model_type in ['KAN']:
                 scheduler_decay = 150
             
-            # if self.model_type in ['IA_PINN','I_PINN']:
-            #     scheduler_decay = 300            
+            if self.model_type in ['ChebyKAN']:
+                 scheduler_decay = 100            
             
             if (self.iter>0) and (self.iter % scheduler_decay == 0):
                 self.scheduler.step()
@@ -436,22 +436,22 @@ class Diffusion_Reaction:
                     self.lam_ic1_log.append(1. / (self.var_ic1 ** 2).item())
                     self.lam_ic2_log.append(1. / (self.var_ic2 ** 2).item())
 
-                elif self.model_type in ['IAW_PINN', 'I_PINN']:
-                    pbar.set_postfix({
-                                      'Loss': '{0:.3e}'.format(loss_true.item()),
-                                      'loss_pde': '{0:.3e}'.format(loss_pde.item()),
-                                      'loss_bc': '{0:.3e}'.format(loss_bc.item()),
-                                      'loss_ic': '{0:.3e}'.format(loss_ic.item()),
-                                      'lam_ic1': '{0:.2f}'.format(
-                                          1. / (self.var_ic1 ** 2 + 1. / self.lam_threshold).item()),
-                                      'lam_ic2': '{0:.2f}'.format(
-                                          1. / (self.var_ic2 ** 2 + 1. / self.lam_threshold).item()),
-                                      'lr': '{0:.2e}'.format(current_lr),
-                                      'D*': '{0:.2e},{1:.2e}'.format(torch.max(D_star),torch.min(D_star)),
-                                      'grouped_ic':'{0:.2e},{1:.2e}'.format(loss_ic_gr1,loss_ic_gr2)                                           
-                                      })
-                    self.lam_ic1_log.append(1. / (self.var_ic1 ** 2 + 1. / self.lam_threshold).item())
-                    self.lam_ic2_log.append(1. / (self.var_ic2 ** 2 + 1. / self.lam_threshold).item())
+                # elif self.model_type in ['IAW_PINN', 'I_PINN']:
+                #     pbar.set_postfix({
+                #                       'Loss': '{0:.3e}'.format(loss_true.item()),
+                #                       'loss_pde': '{0:.3e}'.format(loss_pde.item()),
+                #                       'loss_bc': '{0:.3e}'.format(loss_bc.item()),
+                #                       'loss_ic': '{0:.3e}'.format(loss_ic.item()),
+                #                       'lam_ic1': '{0:.2f}'.format(
+                #                           1. / (self.var_ic1 ** 2 + 1. / self.lam_threshold).item()),
+                #                       'lam_ic2': '{0:.2f}'.format(
+                #                           1. / (self.var_ic2 ** 2 + 1. / self.lam_threshold).item()),
+                #                       'lr': '{0:.2e}'.format(current_lr),
+                #                       'D*': '{0:.2e},{1:.2e}'.format(torch.max(D_star),torch.min(D_star)),
+                #                       'grouped_ic':'{0:.2e},{1:.2e}'.format(loss_ic_gr1,loss_ic_gr2)                                           
+                #                       })
+                #     self.lam_ic1_log.append(1. / (self.var_ic1 ** 2 + 1. / self.lam_threshold).item())
+                #     self.lam_ic2_log.append(1. / (self.var_ic2 ** 2 + 1. / self.lam_threshold).item())
 
             self.iter += 1 
         elapsed = timeit.default_timer() - start_time
